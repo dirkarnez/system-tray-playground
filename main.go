@@ -1,182 +1,110 @@
 package main
 
 import (
-	"bufio"
-	"context"
-	"flag"
 	"fmt"
-	"io/fs"
-	"log"
 	"os"
-	"path/filepath"
-	"strings"
+	"time"
 
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/runtime"
-	"github.com/chromedp/chromedp"
-	"github.com/graniticio/inifile"
-)
-
-var (
-	dir string
+	"github.com/getlantern/systray"
+	"github.com/getlantern/systray/example/icon"
+	"github.com/skratchdot/open-golang/open"
 )
 
 func main() {
-	flag.StringVar(&dir, "dir", "", "Absolute path for target directory")
-
-	flag.Parse()
-	if len(dir) < 1 {
-		log.Fatal("No --dir is given")
+	onExit := func() {
+		now := time.Now()
+		os.WriteFile(fmt.Sprintf(`on_exit_%d.txt`, now.UnixNano()), []byte(now.String()), 0644)
 	}
 
-	urlFiles := Scan(dir, ".url")
-	urlFilesLen := len(urlFiles)
-	if urlFilesLen < 1 {
-		log.Fatal("No .url file found")
-	}
-	fmt.Printf("There are %d url files\n", len(urlFiles))
-
-	file, err := os.Create(fmt.Sprintf("%s.txt", getFolderName(dir)))
-	errExit(err)
-	defer file.Close()
-	w := bufio.NewWriter(file)
-
-	for _, s := range urlFiles {
-		ic, err := inifile.NewIniConfigFromPath(s)
-		errExit(err)
-		url, err := ic.Value("InternetShortcut", "URL")
-		errExit(err)
-		fmt.Println("checking", url, ", in", s, "...")
-		protocol := url[0:strings.Index(url, `://`)]
-		if protocol == `http` || protocol == `https` {
-			title, err := getTitle(url)
-			errExit(err)
-			fmt.Fprintf(w, "- [%s](%s)\n", title, url)
-		} else {
-			fmt.Fprintf(w, "- [%s](%s)\n", url, url)
-		}
-	}
-	errExit(w.Flush())
-
-	// for _, s := range urlFiles {
-	// 	errExit(os.Remove(s))
-	// }
+	systray.Run(onReady, onExit)
 }
 
-func errExit(err error) {
-	if err != nil {
-		log.Fatal(err)
-	}
-}
+func onReady() {
+	systray.SetTemplateIcon(icon.Data, icon.Data)
+	systray.SetTitle("Awesome App")
+	systray.SetTooltip("Lantern")
+	mQuitOrig := systray.AddMenuItem("Quit", "Quit the whole app")
+	go func() {
+		<-mQuitOrig.ClickedCh
+		fmt.Println("Requesting quit")
+		systray.Quit()
+		fmt.Println("Finished quitting")
+	}()
 
-func Scan(root, ext string) []string {
-	var a []string
-	filepath.WalkDir(root, func(s string, d fs.DirEntry, e error) error {
-		if e != nil {
-			return e
-		}
-		if filepath.Ext(d.Name()) == ext {
-			a = append(a, s)
-		}
-		return nil
-	})
-	return a
-}
+	// We can manipulate the systray in other goroutines
+	go func() {
+		systray.SetTemplateIcon(icon.Data, icon.Data)
+		systray.SetTitle("Awesome App")
+		systray.SetTooltip("Pretty awesome棒棒嗒")
+		mChange := systray.AddMenuItem("Change Me", "Change Me")
+		// mAllowRemoval := systray.AddMenuItem("Allow removal", "macOS only: allow removal of the icon when cmd is pressed")
+		mChecked := systray.AddMenuItemCheckbox("Unchecked", "Check Me", true)
+		mEnabled := systray.AddMenuItem("Enabled", "Enabled")
+		// Sets the icon of a menu item. Only available on Mac.
+		mEnabled.SetTemplateIcon(icon.Data, icon.Data)
 
-func getTitle(urlstr string) (string, error) {
-	ctx, cancel := chromedp.NewContext(context.Background())
-	defer cancel()
-	var title string
+		systray.AddMenuItem("Ignored", "Ignored")
 
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		subMenuTop := systray.AddMenuItem("SubMenuTop", "SubMenu Test (top)")
+		subMenuMiddle := subMenuTop.AddSubMenuItem("SubMenuMiddle", "SubMenu Test (middle)")
+		subMenuBottom := subMenuMiddle.AddSubMenuItemCheckbox("SubMenuBottom - Toggle Panic!", "SubMenu Test (bottom) - Hide/Show Panic!", false)
+		subMenuBottom2 := subMenuMiddle.AddSubMenuItem("SubMenuBottom - Panic!", "SubMenu Test (bottom)")
 
-		switch ev := ev.(type) {
+		mUrl := systray.AddMenuItem("Open UI", "my home")
+		mQuit := systray.AddMenuItem("退出", "Quit the whole app")
 
-		case *network.EventResponseReceived:
-			resp := ev.Response
-			if resp.URL == urlstr {
-				log.Printf("received headers: %s %s", resp.URL, resp.MimeType)
-				if resp.MimeType != "text/html" {
-					chromedp.Cancel(ctx)
-				}
+		// Sets the icon of a menu item. Only available on Mac.
+		mQuit.SetIcon(icon.Data)
 
-				if strings.Contains(resp.URL, "youtube.com") {
-					log.Printf("YT!!")
-				}
-
-				// may be redirected
-				switch ContentType := resp.Headers["Content-Type"].(type) {
-				case string:
-					// here v has type T
-					if !strings.Contains(ContentType, "text/html") {
-						chromedp.Cancel(ctx)
-					}
-				}
-
-				switch ContentType := resp.Headers["content-type"].(type) {
-				case string:
-					// here v has type T
-					if !strings.Contains(ContentType, "text/html") {
-						chromedp.Cancel(ctx)
-					}
-				}
+		systray.AddSeparator()
+		mToggle := systray.AddMenuItem("Toggle", "Toggle the Quit button")
+		shown := true
+		toggle := func() {
+			if shown {
+				subMenuBottom.Check()
+				subMenuBottom2.Hide()
+				mQuitOrig.Hide()
+				mEnabled.Hide()
+				shown = false
+			} else {
+				subMenuBottom.Uncheck()
+				subMenuBottom2.Show()
+				mQuitOrig.Show()
+				mEnabled.Show()
+				shown = true
 			}
 		}
-	})
 
-	req := `
-(async () => new Promise((resolve, reject) => {
-	var handle = NaN;
-
-	(function animate() {
-		if (!isNaN(handle)) {
-			clearTimeout(handle);
+		for {
+			select {
+			case <-mChange.ClickedCh:
+				mChange.SetTitle("I've Changed")
+			// case <-mAllowRemoval.ClickedCh:
+			// 	systray.SetRemovalAllowed(true)
+			case <-mChecked.ClickedCh:
+				if mChecked.Checked() {
+					mChecked.Uncheck()
+					mChecked.SetTitle("Unchecked")
+				} else {
+					mChecked.Check()
+					mChecked.SetTitle("Checked")
+				}
+			case <-mEnabled.ClickedCh:
+				mEnabled.SetTitle("Disabled")
+				mEnabled.Disable()
+			case <-mUrl.ClickedCh:
+				open.Run("https://www.getlantern.org")
+			case <-subMenuBottom2.ClickedCh:
+				panic("panic button pressed")
+			case <-subMenuBottom.ClickedCh:
+				toggle()
+			case <-mToggle.ClickedCh:
+				toggle()
+			case <-mQuit.ClickedCh:
+				systray.Quit()
+				fmt.Println("Quit2 now...")
+				return
+			}
 		}
-
-		if (document.title.length > 0 && !document.title.startsWith("http")) {
-			resolve(document.title);
-		} else {
-			handle = setTimeout(animate, 1000);
-		}
-	}());
-}));
-`
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(urlstr),
-		//chromedp.Evaluate(`window.location.href`, &res),
-		chromedp.Evaluate(req, nil, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-			return p.WithAwaitPromise(true)
-		}),
-		chromedp.Title(&title),
-	)
-	if err == context.Canceled {
-		// url as title
-		log.Printf("Cancel!!")
-		return urlstr, nil
-	}
-
-	return title, err
-}
-
-// fmt.Println(getFolderName(`P`))           //P
-// fmt.Println(getFolderName(`P:`))          //P
-// fmt.Println(getFolderName(`P:\`))         //P
-// fmt.Println(getFolderName(`P:\testing`))  //testing
-// fmt.Println(getFolderName(`P:\testing\`)) //testing
-func getFolderName(input string) string {
-	var folderName string
-	lastIndex := strings.LastIndex(input, `\`)
-	length := len(input)
-	if lastIndex+1 == length {
-		lastIndex = strings.LastIndex(input[0:length-1], `\`)
-		folderName = input[lastIndex+1 : length-1]
-	} else {
-		folderName = input[lastIndex+1 : length]
-	}
-
-	if folderName[len(folderName)-1:] == ":" {
-		return folderName[0 : len(folderName)-1]
-	} else {
-		return folderName
-	}
+	}()
 }
