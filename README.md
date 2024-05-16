@@ -1,8 +1,4 @@
-url-files-to-markdown
-=====================
-### How to use
-```
---dir={target}
-```
-### TODOs
-- [ ] file urls (e.g. "application/pdf")
+system-tray-playground
+======================
+### Using
+- [getlantern/systray: a cross platfrom Go library to place an icon and menu in the notification area](https://github.com/getlantern/systray/tree/master)
